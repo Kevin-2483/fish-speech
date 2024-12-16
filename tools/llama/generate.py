@@ -5,7 +5,7 @@ import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import click
 import hydra
@@ -717,6 +717,99 @@ def main(
         else:
             logger.error(f"Error: {response}")
 
+# 定义全局变量来存储模型和解码函数
+model = None
+decode_one_token = None
+
+def load_model_once(checkpoint_path: Path, device: str, precision: torch.dtype, compile: bool) -> None:
+    global model, decode_one_token
+    if model is None:  # 只有在模型未加载时才加载
+        print("Loading model ...")
+        t0 = time.time()
+        model, decode_one_token = load_model(checkpoint_path, device, precision, compile=compile)
+        with torch.device(device):
+            model.setup_caches(
+                max_batch_size=1,
+                max_seq_len=model.config.max_seq_len,
+                dtype=next(model.parameters()).dtype,
+            )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"Time to load model: {time.time() - t0:.02f} seconds")
+
+
+def generate_text(
+    text: str,
+    prompt_text: Optional[List[str]] = None,
+    prompt_tokens: Optional[List[Path]] = None,
+    num_samples: int = 1,
+    max_new_tokens: int = 0,
+    top_p: float = 0.7,
+    repetition_penalty: float = 1.2,
+    temperature: float = 0.7,
+    checkpoint_path: Path = Path("checkpoints/fish-speech-1.4"),
+    device: str = "cuda",
+    compile: bool = False,
+    seed: int = 42,
+    half: bool = False,
+    iterative_prompt: bool = True,
+    chunk_length: int = 100,
+) -> List[str]:
+
+    precision = torch.half if half else torch.bfloat16
+
+    # 加载模型
+    load_model_once(checkpoint_path, device, precision, compile)
+
+    if prompt_text is not None and len(prompt_text) != len(prompt_tokens):
+        raise ValueError(
+            f"Number of prompt text ({len(prompt_text)}) and prompt tokens ({len(prompt_tokens)}) should be the same"
+        )
+
+    if prompt_tokens is not None:
+        prompt_tokens = [torch.from_numpy(np.load(p)).to(device) for p in prompt_tokens]
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+
+    generator = generate_long(
+        model=model,
+        device=device,
+        decode_one_token=decode_one_token,
+        text=text,
+        num_samples=num_samples,
+        max_new_tokens=max_new_tokens,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
+        temperature=temperature,
+        compile=compile,
+        iterative_prompt=iterative_prompt,
+        chunk_length=chunk_length,
+        prompt_text=prompt_text,
+        prompt_tokens=prompt_tokens,
+    )
+
+    idx = 0
+    codes = []
+    generated_texts = []
+
+    for response in generator:
+        if response.action == "sample":
+            codes.append(response.codes)
+            print(f"Sampled text: {response.text}")
+            generated_texts.append(response.text)  # 保存生成的文本
+        elif response.action == "next":
+            if codes:
+                np.save(f"tmp/codes_{idx}.npy", torch.cat(codes, dim=1).cpu().numpy())
+                print(f"Saved codes to codes_{idx}.npy")
+            print(f"Next sample")
+            codes = []
+            idx += 1
+        else:
+            print(f"Error: {response}")
+
+    return generated_texts  # 返回生成的文本列表
 
 if __name__ == "__main__":
     main()
