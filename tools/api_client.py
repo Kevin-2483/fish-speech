@@ -8,14 +8,15 @@ import requests
 from pydub import AudioSegment
 from pydub.playback import play
 
-from tools.commons import ServeReferenceAudio, ServeTTSRequest
 from tools.file import audio_to_bytes, read_ref_text
+from tools.schema import ServeReferenceAudio, ServeTTSRequest
 
 
 def parse_args():
 
     parser = argparse.ArgumentParser(
-        description="Send a WAV file and text to a server and receive synthesized audio."
+        description="Send a WAV file and text to a server and receive synthesized audio.",
+        formatter_class=argparse.RawTextHelpFormatter,
     )
 
     parser.add_argument(
@@ -33,7 +34,7 @@ def parse_args():
         "-id",
         type=str,
         default=None,
-        help="ID of the reference model to be used for the speech",
+        help="ID of the reference model to be used for the speech\n(Local: name of folder containing audios and files)",
     )
     parser.add_argument(
         "--reference_audio",
@@ -41,7 +42,7 @@ def parse_args():
         type=str,
         nargs="+",
         default=None,
-        help="Path to the WAV file",
+        help="Path to the audio file",
     )
     parser.add_argument(
         "--reference_text",
@@ -60,7 +61,7 @@ def parse_args():
     )
     parser.add_argument(
         "--play",
-        type=bool,
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Whether to play audio after receiving data",
     )
@@ -68,17 +69,21 @@ def parse_args():
     parser.add_argument(
         "--format", type=str, choices=["wav", "mp3", "flac"], default="wav"
     )
-    parser.add_argument("--mp3_bitrate", type=int, default=64)
-    parser.add_argument("--opus_bitrate", type=int, default=-1000)
-    parser.add_argument("--latency", type=str, default="normal", help="延迟选项")
+    parser.add_argument(
+        "--latency",
+        type=str,
+        default="normal",
+        choices=["normal", "balanced"],
+        help="Used in api.fish.audio/v1/tts",
+    )
     parser.add_argument(
         "--max_new_tokens",
         type=int,
         default=1024,
-        help="Maximum new tokens to generate",
+        help="Maximum new tokens to generate. \n0 means no limit.",
     )
     parser.add_argument(
-        "--chunk_length", type=int, default=100, help="Chunk length for synthesis"
+        "--chunk_length", type=int, default=200, help="Chunk length for synthesis"
     )
     parser.add_argument(
         "--top_p", type=float, default=0.7, help="Top-p sampling for synthesis"
@@ -92,10 +97,7 @@ def parse_args():
     parser.add_argument(
         "--temperature", type=float, default=0.7, help="Temperature for sampling"
     )
-    parser.add_argument(
-        "--speaker", type=str, default=None, help="Speaker ID for voice synthesis"
-    )
-    parser.add_argument("--emotion", type=str, default=None, help="Speaker's Emotion")
+
     parser.add_argument(
         "--streaming", type=bool, default=False, help="Enable streaming response"
     )
@@ -106,14 +108,16 @@ def parse_args():
     parser.add_argument(
         "--use_memory_cache",
         type=str,
-        default="never",
-        help="Cache encoded references codes in memory",
+        default="off",
+        choices=["on", "off"],
+        help="Cache encoded references codes in memory.\n",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=None,
-        help="None means randomized inference, otherwise deterministic",
+        help="`None` means randomized inference, otherwise deterministic.\n"
+        "It can't be used for fixing a timbre.",
     )
 
     return parser.parse_args()
@@ -144,21 +148,19 @@ if __name__ == "__main__":
     data = {
         "text": args.text,
         "references": [
-            ServeReferenceAudio(audio=ref_audio, text=ref_text)
+            ServeReferenceAudio(
+                audio=ref_audio if ref_audio is not None else b"", text=ref_text
+            )
             for ref_text, ref_audio in zip(ref_texts, byte_audios)
         ],
         "reference_id": idstr,
         "normalize": args.normalize,
         "format": args.format,
-        "mp3_bitrate": args.mp3_bitrate,
-        "opus_bitrate": args.opus_bitrate,
         "max_new_tokens": args.max_new_tokens,
         "chunk_length": args.chunk_length,
         "top_p": args.top_p,
         "repetition_penalty": args.repetition_penalty,
         "temperature": args.temperature,
-        "speaker": args.speaker,
-        "emotion": args.emotion,
         "streaming": args.streaming,
         "use_memory_cache": args.use_memory_cache,
         "seed": args.seed,
